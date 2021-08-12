@@ -1,0 +1,427 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+labels:
+  app: todoapp
+  template: todoapp
+metadata:
+  annotations:
+  name: todoapp
+objects:
+- apiVersion: image.openshift.io/v1
+  kind: ImageStream
+  metadata:
+    annotations:
+    labels:
+      app: backend
+    name: backend
+  spec:
+    lookupPolicy:
+      local: false
+- apiVersion: image.openshift.io/v1
+  kind: ImageStream
+  metadata:
+    annotations:
+    name: frontend
+  spec:
+    lookupPolicy:
+      local: false
+    tags:
+    - annotations: null
+      from:
+        kind: DockerImage
+        name: image-registry.openshift-image-registry.svc:5000/fscojr-review-common/todo-frontend:latest
+      generation: 2
+      importPolicy: {}
+      name: latest
+      referencePolicy:
+        type: Source
+- apiVersion: image.openshift.io/v1
+  kind: ImageStream
+  metadata:
+    annotations:
+      app: tododb
+    name: tododb
+  spec:
+    lookupPolicy:
+      local: false
+    tags:
+    - annotations:
+      from:
+        kind: DockerImage
+        name: ${DATABASE_IMAGE}
+      name: latest
+      referencePolicy:
+        type: Source
+- apiVersion: v1
+  stringData:
+    password: ${PASSWORD}
+    user: todoapp 
+  kind: Secret
+  metadata:
+    name: tododb
+  type: Opaque
+- apiVersion: v1
+  data:
+    init: ${CLEAN_DATABASE}
+  kind: ConfigMap
+  metadata:
+    name: todoapp
+- apiVersion: build.openshift.io/v1
+  kind: BuildConfig
+  metadata:
+    annotations:
+    labels:
+      app: backend
+    name: backend
+  spec:
+    nodeSelector: null
+    output:
+      to:
+        kind: ImageStreamTag
+        name: backend:latest
+    postCommit: {}
+    resources: {}
+    runPolicy: Serial
+    source:
+      contextDir: ${BACK_END_CTXDIR}
+      git:
+        ref: ${BACK_END_BRANCH}
+        uri: ${BACK_END_REPO}
+      type: Git
+    strategy:
+      sourceStrategy:
+        from:
+          kind: ImageStreamTag
+          name: nodejs:10
+          namespace: openshift
+      type: Source
+    successfulBuildsHistoryLimit: 5
+    triggers:
+    - github:
+        secret: ${SECRET}
+      type: GitHub
+    - generic:
+        secret: ${SECRET}
+      type: Generic
+    - type: ConfigChange
+    - imageChange: {}
+- apiVersion: apps.openshift.io/v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+    labels:
+      app: tododb
+    name: tododb
+  spec:
+    replicas: 1
+    selector:
+      app: tododb
+      deploymentconfig: tododb
+    template:
+      metadata:
+        annotations:
+        labels:
+          app: tododb
+          deploymentconfig: tododb
+      spec:
+        containers:
+        - env:
+          - name: MYSQL_DATABASE
+            value: todo
+          - name: MYSQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: password
+                name: tododb
+          - name: MYSQL_USER
+            valueFrom:
+              secretKeyRef:
+                key: user
+                name: tododb
+          imagePullPolicy: Always
+          name: tododb
+          ports:
+          - containerPort: 3306
+            protocol: TCP
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+    test: false
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - tododb
+        from:
+          kind: ImageStreamTag
+          name: tododb:latest
+      type: ImageChange
+- apiVersion: apps.openshift.io/v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+    labels:
+      app: backend
+    name: backend
+  spec:
+    replicas: 1
+    selector:
+      app: backend
+      deploymentconfig: backend
+    template:
+      metadata:
+        annotations:
+        labels:
+          app: backend
+          deploymentconfig: backend
+      spec:
+        containers:
+        - env:
+          - name: DATABASE_NAME
+            value: todo
+          - name: DATABASE_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: password
+                name: tododb
+          - name: DATABASE_SVC
+            value: tododb
+          - name: DATABASE_USER
+            valueFrom:
+              secretKeyRef:
+                key: user
+                name: tododb
+          - name: DATABASE_INIT
+            valueFrom:
+              configMapKeyRef:
+                key: init
+                name: todoapp
+          readnessProbe:
+            httpGet:
+              path: /todo/api/host
+              port: 8080
+            initialDelaySeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /todo/api/items-count
+              port: 8080
+            timeoutSeconds: 3
+            initialDelaySeconds: 10
+          imagePullPolicy: Always
+          name: backend
+          ports:
+          - containerPort: 8080
+            protocol: TCP
+          resources: {}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+    test: false
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - backend
+        from:
+          kind: ImageStreamTag
+          name: backend:latest
+      type: ImageChange
+- apiVersion: apps.openshift.io/v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+      openshift.io/generated-by: OpenShiftNewApp
+    creationTimestamp: "2021-07-27T03:20:46Z"
+    generation: 2
+    labels:
+      app: frontend
+    name: frontend
+  spec:
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      app: frontend
+      deploymentconfig: frontend
+    strategy:
+      activeDeadlineSeconds: 21600
+      resources: {}
+      rollingParams:
+        intervalSeconds: 1
+        maxSurge: 25%
+        maxUnavailable: 25%
+        timeoutSeconds: 600
+        updatePeriodSeconds: 1
+      type: Rolling
+    template:
+      metadata:
+        annotations:
+        labels:
+          app: frontend
+          deploymentconfig: frontend
+      spec:
+        containers:
+        - env:
+          - name: BACKEND_HOST
+            value: ${BACKEND}
+          imagePullPolicy: Always
+          name: frontend
+          ports:
+          - containerPort: 8080
+            protocol: TCP
+          resources: {}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+    test: false
+    triggers:
+    - type: ConfigChange
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - frontend
+        from:
+          kind: ImageStreamTag
+          name: todo-frontend:latest
+          namespace: fscojr-review-common
+      type: ImageChange
+- apiVersion: v1
+  kind: Service
+  metadata:
+    labels:
+      app: backend
+    name: backend
+  spec:
+    ports:
+    - name: "8080"
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+    selector:
+      app: backend
+    sessionAffinity: None
+    type: ClusterIP
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+    labels:
+      app: frontend
+    name: frontend
+  spec:
+    ports:
+    - name: 8080-tcp
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+    selector:
+      app: frontend
+      deploymentconfig: frontend
+    sessionAffinity: None
+    type: ClusterIP
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+    labels:
+      app: tododb
+    name: tododb
+  spec:
+    ports:
+    - name: 3306-tcp
+      port: 3306
+      protocol: TCP
+      targetPort: 3306
+    selector:
+      app: tododb
+      deploymentconfig: tododb
+    type: ClusterIP
+- apiVersion: route.openshift.io/v1
+  kind: Route
+  metadata:
+    labels:
+      app: backend
+    name: backend
+  spec:
+    host: ${BACKEND}
+    port:
+      targetPort: 8080-tcp
+    to:
+      kind: Service
+      name: backend
+      weight: 100
+    wildcardPolicy: None
+- apiVersion: route.openshift.io/v1
+  kind: Route
+  metadata:
+    labels:
+      app: frontend
+    name: frontend
+  spec:
+    host: ${HOSTNAME}
+    port:
+      targetPort: 8080-tcp
+    to:
+      kind: Service
+      name: frontend
+      weight: 100
+    wildcardPolicy: None
+
+parameters:
+- description: The URL of the MySQL server container image. Its default value is
+  displayName: Database Image
+  name: DATABASE_IMAGE
+  required: true
+  value: registry.access.redhat.com/rhscl/mysql-57-rhel7
+- description: The database connection password. It has no default value
+  displayName: PasswordMysql
+  from: '[a-zA-Z0-9]{16}'
+  generate: expression
+  name: PASSWORD
+- description: The URL of the back-end sources.
+  displayName: Repositorio GIT 
+  name: BACK_END_REPO
+  required: true
+  value: https://github.com/fscojr/DO288-apps
+- description: The folder that contains the back-end sources.
+  displayName: Branch GIT 
+  name: BACK_END_CTXDIR
+  required: true
+  value: todo-backend
+- description: The the branch to fetch the back-end sources.
+  displayName: Branch GIT 
+  name: BACK_END_BRANCH
+  required: true
+  value: master
+- description: The database connection password. It has no default value
+  displayName: PasswordMysql
+  from: '[a-zA-Z0-9]{16}'
+  generate: expression
+  name: SECRET
+- description: Indicates whether the application initializes the database on start up. Its default value is 
+  displayName: VALUE 
+  name: CLEAN_DATABASE
+  required: true
+  value: "false"
+- description: The host name used to access the To Do List front end from a web browser. It has no default value
+  displayName: URL_TODO
+  name: HOSTNAME
+  required: true
+- description: The host name used by the To Do List front end to access the To Do List back end. It has no default value. 
+  displayName: URL_BACKEND
+  name: BACKEND
+  required: true
+
+
+    
+

@@ -1,0 +1,119 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+labels:
+  app: todoapp
+  template: todoapp
+metadata:
+  annotations:
+  name: todoapp
+objects:
+- apiVersion: image.openshift.io/v1
+  kind: ImageStream
+  metadata:
+    annotations:
+      app: tododb
+    name: tododb
+  spec:
+    lookupPolicy:
+      local: false
+    tags:
+    - annotations:
+      from:
+        kind: DockerImage
+        name: ${DATABASE_IMAGE}
+      name: latest
+      referencePolicy:
+        type: Source
+- apiVersion: v1
+  stringData:
+    password: ${PASSWORD}
+    user: todoapp 
+  kind: Secret
+  metadata:
+    name: tododb
+  type: Opaque
+- apiVersion: apps.openshift.io/v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+    labels:
+      app: tododb
+    name: tododb
+  spec:
+    replicas: 1
+    selector:
+      app: tododb
+      deploymentconfig: tododb
+    template:
+      metadata:
+        annotations:
+        labels:
+          app: tododb
+          deploymentconfig: tododb
+      spec:
+        containers:
+        - env:
+          - name: MYSQL_DATABASE
+            value: todo
+          - name: MYSQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: password
+                name: tododb
+          - name: MYSQL_USER
+            valueFrom:
+              secretKeyRef:
+                key: user
+                name: tododb
+          imagePullPolicy: Always
+          name: tododb
+          ports:
+          - containerPort: 3306
+            protocol: TCP
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+    test: false
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - tododb
+        from:
+          kind: ImageStreamTag
+          name: tododb:latest
+      type: ImageChange
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+    labels:
+      app: tododb
+    name: tododb
+  spec:
+    ports:
+    - name: 3306-tcp
+      port: 3306
+      protocol: TCP
+      targetPort: 3306
+    selector:
+      app: tododb
+      deploymentconfig: tododb
+    type: ClusterIP
+
+
+parameters:
+- description: The URL of the MySQL server container image. Its default value is
+  displayName: Database Image
+  name: DATABASE_IMAGE
+  required: true
+  value: registry.access.redhat.com/rhscl/mysql-57-rhel7
+- description: The database connection password. It has no default value
+  displayName: PasswordMysql
+  from: '[a-zA-Z0-9]{16}'
+  generate: expression
+  name: PASSWORD
+
+
